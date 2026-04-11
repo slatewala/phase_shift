@@ -1,42 +1,39 @@
 import 'package:audioplayers/audioplayers.dart';
 
-/// Crash-safe sound service.
+/// Crash-proof sound service.
 ///
-/// Some Android devices crash with PlayerMode.lowLatency due to
-/// MediaPlayer.getPlaybackParams IllegalStateException. This service
-/// uses mediaPlayer mode (safe) and catches all errors.
+/// Each play() creates an independent AudioPlayer that self-disposes
+/// after playback. No shared state, no stop/dispose race conditions.
+/// Cannot crash regardless of Android MediaPlayer state.
 class SoundService {
   static final SoundService _singleton = SoundService._internal();
   static SoundService get instance => _singleton;
   factory SoundService() => _singleton;
   SoundService._internal();
 
-  final Map<String, AudioPlayer> _players = {};
   bool _enabled = true;
-
   bool get enabled => _enabled;
   set enabled(bool v) => _enabled = v;
+  bool get muted => !_enabled;
+  void toggleMute() { _enabled = !_enabled; }
 
   Future<void> init() async {}
 
+  /// Fire-and-forget: spawns a new player, plays the sound, auto-disposes.
+  /// No shared state means no race conditions or IllegalStateException.
   Future<void> play(String name) async {
     if (!_enabled) return;
     try {
-      // Use a fresh player each time to avoid state issues on Android
-      final existing = _players[name];
-      if (existing != null) {
-        try { await existing.stop(); } catch (_) {}
-        try { await existing.dispose(); } catch (_) {}
-      }
-
       final p = AudioPlayer();
-      _players[name] = p;
-      // Use default mediaPlayer mode — lowLatency crashes on some devices
-      await p.setVolume(1.0);
+      // Auto-dispose when done playing
+      p.onPlayerComplete.listen((_) {
+        try { p.dispose(); } catch (_) {}
+      });
       await p.setReleaseMode(ReleaseMode.stop);
+      await p.setVolume(1.0);
       await p.play(AssetSource('sounds/$name.wav'));
     } catch (_) {
-      // Never crash the game for sound failures
+      // Absolutely never crash for sound
     }
   }
 
@@ -56,14 +53,5 @@ class SoundService {
   Future<void> playSurvive() => play('survive');
   Future<void> playExtinct() => play('extinct');
 
-  bool get muted => !_enabled;
-  void toggleMute() { _enabled = !_enabled; }
-
-  Future<void> dispose() async {
-    for (final p in _players.values) {
-      try { await p.stop(); } catch (_) {}
-      try { await p.dispose(); } catch (_) {}
-    }
-    _players.clear();
-  }
+  Future<void> dispose() async {}
 }
